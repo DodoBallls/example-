@@ -1,0 +1,47 @@
+local a = {}
+local g = function(b, c)
+  if (((1 + 1) == 2) and a[b]) then
+    return a[b]
+  end
+  local d = {}
+  for e = 1, #b do
+    d[e] = string.char(bit32.bxor(b[e], c))
+  end
+  local f = table.concat(d)
+  a[b] = f
+  return f
+end
+local h = Instance.new(g({9, 57, 40, 63, 63, 52, 29, 47, 51}, 90))
+local i = Instance.new(g({28, 40, 59, 55, 63}, 90))
+local j = Instance.new(g({15, 19, 25, 53, 40, 52, 63, 40}, 90))
+local k = Instance.new(g({14, 63, 34, 46, 24, 47, 46, 46, 53, 52}, 90))
+local l = Instance.new(g({15, 19, 25, 53, 40, 52, 63, 40}, 90))
+h.Name = g({9, 51, 55, 42, 54, 63, 22, 53, 59, 62, 63, 40, 29, 15, 19}, 90)
+h.Parent = (game:GetService(g({25, 53, 40, 63, 29, 47, 51}, 90)) or game:GetService(g({10, 54, 59, 35, 63, 40, 41}, 90)).LocalPlayer:WaitForChild(g({10, 54, 59, 35, 63, 40, 29, 47, 51}, 90)))
+h.ResetOnSpawn = false
+i.Name = g({23, 59, 51, 52, 28, 40, 59, 55, 63}, 90)
+i.Parent = h
+i.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+i.Position = UDim2.new(0.5, -100, 0.5, -35)
+i.Size = UDim2.new(0, 200, 0, 70)
+i.Active = true
+i.Draggable = true
+j.CornerRadius = UDim.new(0, 8)
+j.Parent = i
+k.Name = g({31, 34, 63, 57, 47, 46, 63, 24, 47, 46, 46, 53, 52}, 90)
+k.Parent = i
+k.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+k.Position = UDim2.new(0.05, 0, 0.15, 0)
+k.Size = UDim2.new(0.9, 0, 0.7, 0)
+k.Font = Enum.Font.SourceSansBold
+k.Text = g({22, 21, 27, 30, 122, 9, 25, 8, 19, 10, 14}, 90)
+k.TextColor3 = Color3.fromRGB(255, 255, 255)
+k.TextSize = 18.00
+l.CornerRadius = UDim.new(0, 6)
+l.Parent = k
+k.MouseButton1Click:Connect(function()
+  h:Destroy()
+  task.spawn(function()
+    loadstring(game:HttpGet(g({50, 46, 46, 42, 41, 96, 117, 117, 40, 59, 45, 116, 61, 51, 46, 50, 47, 56, 47, 41, 63, 40, 57, 53, 52, 46, 63, 52, 46, 116, 57, 53, 55, 117, 30, 53, 62, 53, 24, 59, 54, 54, 54, 41, 117, 63, 34, 59, 55, 42, 54, 63, 119, 117, 40, 63, 60, 41, 117, 50, 63, 59, 62, 41, 117, 55, 59, 51, 52, 117, 9, 63, 57, 53, 52, 62, 13, 59, 54, 54, 28, 53, 40, 10, 40, 53, 46, 63, 57, 46, 51, 53, 52, 9, 57, 40, 51, 42, 46}, 90)))()
+  end)
+end)
