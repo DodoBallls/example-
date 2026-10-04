@@ -1030,4 +1030,41 @@ end)
 
 -- ── DRAG WINDOW ──────────────────────────────────────────────────────────────
 local dragging, dragInput, dragStart, startPos
-TitleBar
+TitleBar.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1
+    or inp.UserInputType == Enum.UserInputType.Touch then
+        dragging = true; dragStart = inp.Position; startPos = Main.Position
+        inp.Changed:Connect(function()
+            if inp.UserInputState == Enum.UserInputState.End then dragging = false end
+        end)
+    end
+end)
+TitleBar.InputChanged:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseMovement
+    or inp.UserInputType == Enum.UserInputType.Touch then dragInput = inp end
+end)
+UserInputService.InputChanged:Connect(function(inp)
+    if inp == dragInput and dragging then
+        local d = inp.Position - dragStart
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+
+-- ── UNLOAD ────────────────────────────────────────────────────────────────────
+local function unload()
+    running = false
+    if AF.enabled then af_stop() end
+    if NK.enabled then nk_disable() end
+    if SP.enabled then sp_disable() end
+    if KA.enabled then ka_disable() end
+    genv.__SAE_FULL_LOADED = nil
+    ScreenGui:Destroy()
+    print(("[SAE] unloaded — total stolen: %d"):format(StolenCount))
+end
+
+CloseBtn.MouseButton1Click:Connect(unload)
+UserInputService.InputBegan:Connect(function(inp, gp)
+    if not gp and inp.KeyCode == Enum.KeyCode.End then unload() end
+end)
+
+print("[SAE Full] loaded — AutoFarm + NoKB + Speed + KillAura ready 🔥")
