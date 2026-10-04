@@ -1,0 +1,494 @@
+-- [Roblox / Steal an Egg / Full Script]
+-- Auto Farm Rarest First + No Knockback + Speed Hack + Kill Aura
+-- Sources: bobloscript opensource_egg + robscript.com kill aura
+-- Requires: getconnections, hookmetamethod, hookfunction, getgc, islclosure,
+--           debug.info, debug.getupvalues, identifyexecutor
+
+local Players           = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService  = game:GetService("UserInputService")
+local TweenService      = game:GetService("TweenService")
+local Workspace         = game:GetService("Workspace")
+
+local LocalPlayer = Players.LocalPlayer
+local genv = (getgenv and getgenv()) or _G
+
+if genv.__SAE_FULL_LOADED then
+    warn("[SAE] already running — press End to unload first")
+    return
+end
+genv.__SAE_FULL_LOADED = true
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- MODULE BINDS
+-- ════════════════════════════════════════════════════════════════════════════
+
+local function findModule(name)
+    for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+        if d:IsA("ModuleScript") and d.Name == name then
+            local ok, mod = pcall(require, d)
+            if ok then return mod end
+        end
+    end
+end
+
+local function requirePath(timeout, ...)
+    local cur = ReplicatedStorage
+    for _, name in ipairs({...}) do
+        if not cur then return nil end
+        cur = cur:FindFirstChild(name) or cur:WaitForChild(name, timeout or 4)
+    end
+    if not cur then return nil end
+    local ok, mod = pcall(require, cur)
+    return ok and mod or nil
+end
+
+local function pickFn(mod, ...)
+    if type(mod) ~= "table" then return nil end
+    for i = 1, select("#", ...) do
+        local fn = mod[select(i, ...)]
+        if type(fn) == "function" then return fn end
+    end
+end
+
+local function findRemoteContains(...)
+    local parts = {...}
+    for _, d in ipairs(ReplicatedStorage:GetDescendants()) do
+        if d:IsA("RemoteEvent") or d:IsA("RemoteFunction") then
+            local ok = true
+            for _, p in ipairs(parts) do
+                if not d.Name:find(p, 1, true) then ok = false; break end
+            end
+            if ok then return d end
+        end
+    end
+end
+
+local EggStateModule  = requirePath(6, "Client", "EggState")          or findModule("EggState")
+local PlotStateModule = requirePath(6, "Client", "PlotState")         or findModule("PlotState")
+local SlotIdentityMod = requirePath(4, "Shared", "Util", "AreaEggSlotIdentity") or findModule("AreaEggSlotIdentity")
+local AssetsData      = requirePath(4, "Data", "Assets")              or findModule("Assets")
+
+local EggApi = {
+    GetSnapshot  = pickFn(EggStateModule, "ReadFieldEggs",  "GetAreaEggSnapshot"),
+    SyncSnapshot = pickFn(EggStateModule, "SyncFieldEggs",  "RequestAreaEggSnapshot"),
+    CarryChanged = EggStateModule and (EggStateModule.CarryChanged or EggStateModule.AreaEggCarryStateChanged),
+    Carry        = pickFn(EggStateModule, "CarryFieldEgg",  "RequestCarryAreaEgg"),
+}
+local PlotApi = {
+    GetRespawn = pickFn(PlotStateModule, "FindRespawnCFrame", "GetRespawnPointCFrame"),
+    GetPlot    = pickFn(PlotStateModule, "ResolvePlot",       "GetPlotData"),
+}
+local SlotApi = {
+    IsFirstUid = pickFn(SlotIdentityMod, "LooksLikeFirstAreaUid", "IsFirstAreaUid"),
+    BuildKey   = pickFn(SlotIdentityMod, "SlotKey",               "BuildSlotKey"),
+}
+
+if not EggApi.Carry then
+    local remote = findRemoteContains("AskFieldEggCarry")
+    if remote then
+        EggApi.Carry = function(uid, slotKey)
+            if remote:IsA("RemoteFunction") then return remote:InvokeServer(uid, slotKey) end
+            remote:FireServer(uid, slotKey); return true
+        end
+    end
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- RUNTIME STATE
+-- ════════════════════════════════════════════════════════════════════════════
+
+local running       = true
+local IsCarryingEgg = false
+local StolenCount   = 0
+
+local RarityWeight = {
+    Common=1, Uncommon=2, Rare=3, Epic=4, Legendary=5,
+    Mythic=6, Cosmic=7, Secret=8, Eternal=9, Divine=10,
+}
+
+local STEAL_SPEED  = 300
+local GRAB_DELAY   = 0.55
+local ARRIVE_DIST  = 1.35
+local MOVE_TIMEOUT = 14
+local RETURN_PACE  = 0.12
+
+local AreaEggSlotsClient = Workspace:FindFirstChild("AreaEggSlotsClient")
+    or Workspace:WaitForChild("AreaEggSlotsClient", 10)
+
+local AreasFolder = (Workspace:FindFirstChild("__OBJECTS") and Workspace.__OBJECTS:FindFirstChild("Areas"))
+    or (function()
+        local o = Workspace:WaitForChild("__OBJECTS", 8)
+        return o and o:WaitForChild("Areas", 8)
+    end)()
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- FARM HELPERS
+-- ════════════════════════════════════════════════════════════════════════════
+
+local function getRoot()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+
+local function resolveRarity(assetCategory)
+    if type(assetCategory) ~= "string" or not AssetsData or type(AssetsData.Directory) ~= "table" then return nil end
+    local entry = AssetsData.Directory[assetCategory]
+    local r = entry and entry.Rarity
+    if not r then return nil end
+    return r._id or r.DisplayName
+end
+
+local function getLaneZ()
+    if AreasFolder then
+        local gz = AreasFolder:FindFirstChild("GameplayZ")
+        if gz and gz:IsA("BasePart") then return gz.Position.Z end
+        local sl = AreasFolder:FindFirstChild("SeparationLine")
+        if sl and sl:IsA("BasePart") then return sl.Position.Z end
+    end
+    return -365.5
+end
+
+local function getLaneY()
+    if AreasFolder then
+        local gz = AreasFolder:FindFirstChild("GameplayZ")
+        if gz and gz:IsA("BasePart") then return gz.Position.Y + 3 end
+    end
+    local root = getRoot()
+    return root and root.Position.Y or 70
+end
+
+local function groundedY(x, z, fallY)
+    local laneY = getLaneY()
+    local root  = getRoot()
+    local hum   = getHumanoid()
+    local hipH  = (hum and hum.HipHeight > 0) and hum.HipHeight or 2
+    local halfH = root and root.Size.Y * 0.5 or 1
+    local charOffset = hipH + halfH
+    local excluded = {}
+    if LocalPlayer.Character then table.insert(excluded, LocalPlayer.Character) end
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local hitY
+    for _ = 1, 20 do
+        params.FilterDescendantsInstances = excluded
+        local hit = Workspace:Raycast(Vector3.new(x, laneY + 40, z), Vector3.new(0, -160, 0), params)
+        if not hit then break end
+        local y, nm = hit.Position.Y, hit.Instance.Name
+        if nm == "Ground" or nm:lower():find("ground", 1, true) or y <= laneY + 1.5 then
+            hitY = y; break
+        end
+        table.insert(excluded, hit.Instance)
+    end
+    if hitY then return math.clamp(hitY + charOffset, laneY - 2, laneY + 5) end
+    if type(fallY) == "number" then return math.clamp(fallY, laneY - 2, laneY + 5) end
+    return laneY + 3
+end
+
+local function anchor(root, cf)
+    root.CFrame = cf
+    root.AssemblyLinearVelocity  = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+end
+
+local function moveTo(targetX, targetZ, keepGoing)
+    local root = getRoot(); if not root then return false end
+    local hum = getHumanoid()
+    if hum then hum.Sit = false; hum.PlatformStand = false end
+    local deadline = tick() + MOVE_TIMEOUT
+    while tick() < deadline do
+        if not running then return false end
+        if keepGoing and not keepGoing() then return false end
+        root = getRoot(); if not root then return false end
+        local y      = groundedY(targetX, targetZ, root.Position.Y)
+        local target = Vector3.new(targetX, y, targetZ)
+        local delta  = target - root.Position
+        local dist   = delta.Magnitude
+        if dist <= ARRIVE_DIST then
+            anchor(root, CFrame.new(target))
+            pcall(function() getHumanoid():ChangeState(Enum.HumanoidStateType.Running) end)
+            return true
+        end
+        local dt = RunService.Heartbeat:Wait()
+        if type(dt) ~= "number" or dt <= 0 then dt = 1/60 end
+        root = getRoot(); if not root then return false end
+        y = groundedY(targetX, targetZ, root.Position.Y)
+        target = Vector3.new(targetX, y, targetZ)
+        delta  = target - root.Position
+        dist   = delta.Magnitude
+        if dist <= ARRIVE_DIST then anchor(root, CFrame.new(target)); return true end
+        local step    = math.min(dist, STEAL_SPEED * dt)
+        local nextPos = root.Position + delta.Unit * step
+        nextPos = Vector3.new(nextPos.X, groundedY(nextPos.X, nextPos.Z, nextPos.Y), nextPos.Z)
+        local horiz = Vector3.new(delta.X, 0, delta.Z)
+        anchor(root, horiz.Magnitude > 0.05 and CFrame.lookAt(nextPos, nextPos + horiz) or CFrame.new(nextPos))
+    end
+    return false
+end
+
+local function buildPath(from, to)
+    local lZ, lY = getLaneZ(), getLaneY()
+    local wp = {}
+    if math.abs(from.Z - lZ) > 3 then table.insert(wp, Vector3.new(from.X, lY, lZ)) end
+    if math.abs(from.X - to.X)  > 2 then table.insert(wp, Vector3.new(to.X, lY, lZ)) end
+    table.insert(wp, Vector3.new(to.X, lY, to.Z))
+    return wp
+end
+
+local function walkPath(waypoints, keepGoing)
+    for _, wp in ipairs(waypoints) do
+        if keepGoing and not keepGoing() then return false end
+        if not moveTo(wp.X, wp.Z, keepGoing) then return false end
+    end
+    return true
+end
+
+local function swapHumanoid()
+    local char = LocalPlayer.Character; if not char then return false end
+    local hum  = char:FindFirstChildOfClass("Humanoid"); if not hum then return false end
+    if hum:GetAttribute("BobloStealHum") == true then return true end
+    for _, d in ipairs(char:GetDescendants()) do
+        if d:IsA("LocalScript") and d.Name:find("PushBack") then
+            pcall(function() d.Disabled = true; d:Destroy() end)
+        end
+    end
+    hum.Archivable = true
+    local rep = hum:Clone(); if not rep then return false end
+    rep:SetAttribute("BobloStealHum", true)
+    rep.Sit = false; rep.PlatformStand = false; rep.AutoRotate = true
+    hum:Destroy(); rep.Parent = char
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if root then root.AssemblyLinearVelocity = Vector3.zero; root.AssemblyAngularVelocity = Vector3.zero end
+    pcall(function() rep:ChangeState(Enum.HumanoidStateType.Running) end)
+    return char:FindFirstChildOfClass("Humanoid") ~= nil
+end
+
+local function getAreaEggs()
+    if not EggApi.GetSnapshot then return {} end
+    local snap = EggApi.GetSnapshot()
+    if type(snap) ~= "table" or type(snap.Records) ~= "table" then
+        if EggApi.SyncSnapshot then pcall(EggApi.SyncSnapshot) end
+        snap = EggApi.GetSnapshot()
+    end
+    if type(snap) ~= "table" or type(snap.Records) ~= "table" then return {} end
+    local out = {}
+    for _, r in pairs(snap.Records) do
+        if type(r) == "table" and type(r.Uid) == "string" then table.insert(out, r) end
+    end
+    return out
+end
+
+local function slotEggPos(inst)
+    local p = inst:FindFirstChild("Hitbox") or inst:FindFirstChild("CustomBoundingBox") or inst:FindFirstChildOfClass("BasePart")
+    return p and p.Position or inst:GetPivot().Position
+end
+
+local function pickRarestTarget()
+    local worldEggs = AreaEggSlotsClient and AreaEggSlotsClient:GetChildren() or {}
+    if #worldEggs == 0 then return nil end
+    local byUid = {}
+    for _, rec in ipairs(getAreaEggs()) do
+        if type(rec.Uid) == "string" then byUid[rec.Uid] = rec end
+    end
+    local root = getRoot()
+    local best, bestScore = nil, -math.huge
+    for _, inst in ipairs(worldEggs) do
+        local rec = byUid[inst.Name]
+        if rec and (rec.State == "Slot" or rec.State == "Dropped") then
+            local weight = RarityWeight[resolveRarity(rec.AssetCategory) or "Common"] or 0
+            local dist   = root and (root.Position - slotEggPos(inst)).Magnitude or math.huge
+            local score  = weight * 100000 - math.min(dist, 99999)
+            if score > bestScore then best = inst; bestScore = score end
+        end
+    end
+    return best
+end
+
+local function tryCarry(inst)
+    if not inst or not EggApi.Carry then return false end
+    local uid, slotKey = inst.Name, nil
+    if SlotApi.IsFirstUid and SlotApi.IsFirstUid(uid) then
+        for _, rec in ipairs(getAreaEggs()) do
+            if rec.Uid == uid and SlotApi.BuildKey then
+                slotKey = SlotApi.BuildKey(rec.AreaId, rec.NestId); break
+            end
+        end
+    end
+    local ok, carried = pcall(EggApi.Carry, uid, slotKey)
+    if ok and carried == true then return true end
+    return IsCarryingEgg
+end
+
+if EggApi.CarryChanged and type(EggApi.CarryChanged.Connect) == "function" then
+    EggApi.CarryChanged:Connect(function(state)
+        local carrying = type(state) == "table" and state.IsCarrying == true
+        if carrying and not IsCarryingEgg then
+            StolenCount += 1
+            print(("[AutoFarm] stolen: %d"):format(StolenCount))
+        end
+        IsCarryingEgg = carrying
+    end)
+end
+
+local function getBase()
+    if PlotApi.GetRespawn then
+        local cf = PlotApi.GetRespawn(); if cf then return cf.Position end
+    end
+    if PlotApi.GetPlot then
+        local plot = PlotApi.GetPlot()
+        if plot then
+            if plot.CenterPoint then return plot.CenterPoint.Position end
+            if plot.PetArea     then return plot.PetArea.Position     end
+        end
+    end
+end
+
+local function returnToBase(keepGoing)
+    local base = getBase(); local root = getRoot()
+    if not base or not root then return false end
+    if keepGoing and not keepGoing() then return false end
+    local z = root.Position.Z
+    root.CFrame = CFrame.new(Vector3.new(558, 71, z)); root.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.08)
+    if keepGoing and not keepGoing() then return false end
+    root = getRoot(); if not root then return false end
+    root.CFrame = CFrame.new(Vector3.new(546, 71, z)); root.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.08)
+    if keepGoing and not keepGoing() then return false end
+    root = getRoot(); if not root then return false end
+    root.CFrame = CFrame.new(Vector3.new(base.X, base.Y + 5, base.Z)); root.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.12)
+    return true
+end
+
+local function stealEgg(target)
+    swapHumanoid()
+    local tPos = slotEggPos(target)
+    local root = getRoot(); if not root or not tPos then return false end
+    local startX, startZ = root.Position.X, root.Position.Z
+    local startY = groundedY(startX, startZ, root.Position.Y)
+    if not walkPath(buildPath(root.Position, tPos), function() return running end) then return false end
+    root = getRoot()
+    if root then anchor(root, CFrame.new(tPos.X, groundedY(tPos.X, tPos.Z, tPos.Y), tPos.Z)) end
+    local grabStart = tick()
+    while tick() - grabStart < GRAB_DELAY do
+        tryCarry(target)
+        if IsCarryingEgg then task.wait(0.08); break end
+        task.wait(0.04)
+    end
+    root = getRoot()
+    if root then
+        walkPath(buildPath(root.Position, Vector3.new(startX, startY, startZ)), function() return running end)
+        root = getRoot(); if root then anchor(root, CFrame.new(startX, startY, startZ)) end
+    end
+    task.wait(RETURN_PACE)
+    return IsCarryingEgg
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- NO KNOCKBACK
+-- ════════════════════════════════════════════════════════════════════════════
+
+local NK = { enabled = false, charConn = nil }
+
+local function nk_getRef()
+    local Pkgs = ReplicatedStorage:FindFirstChild("Packages"); if not Pkgs then return nil end
+    local Net  = Pkgs:FindFirstChild("Networking");           if not Net  then return nil end
+    return Net:FindFirstChild("RE/RigSync/Refresh")
+end
+
+local function nk_patch()
+    if type(getconnections) ~= "function" then return warn("[NK] getconnections missing") end
+    local ref = nk_getRef(); if not ref then return warn("[NK] RE/RigSync/Refresh not found") end
+    local conns = getconnections(ref); if not conns then return end
+    local n = 0
+    for _, c in next, conns do c:Disconnect(); n += 1 end
+    print(("[NK] patched %d connection(s)"):format(n))
+end
+
+local function nk_enable()
+    NK.enabled = true
+    nk_patch()
+    if NK.charConn then NK.charConn:Disconnect() end
+    NK.charConn = LocalPlayer.CharacterAdded:Connect(function() task.defer(nk_patch) end)
+    print("[NK] ON")
+end
+
+local function nk_disable()
+    NK.enabled = false
+    if NK.charConn then NK.charConn:Disconnect(); NK.charConn = nil end
+    warn("[NK] OFF — connections restore on next respawn")
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- SPEED HACK
+-- ════════════════════════════════════════════════════════════════════════════
+
+local SP = { enabled = false, speed = 500, lock = nil, hbConn = nil, hooksReady = false, oldNewindex = nil }
+
+local function sp_checkExecutor()
+    local miss = {}
+    if type(hookmetamethod)    ~= "function" then table.insert(miss, "hookmetamethod")    end
+    if type(hookfunction)      ~= "function" then table.insert(miss, "hookfunction")      end
+    if type(getgc)             ~= "function" then table.insert(miss, "getgc")             end
+    if type(islclosure)        ~= "function" then table.insert(miss, "islclosure")        end
+    if type(debug) ~= "table" or type(debug.info) ~= "function" or type(debug.getupvalues) ~= "function" then
+        table.insert(miss, "debug.info/getupvalues")
+    end
+    return #miss == 0, miss
+end
+
+local function sp_installHooks()
+    if SP.hooksReady then return end
+    local guard = function(self, key, value)
+        if SP.lock and key == "WalkSpeed" and value ~= SP.lock then
+            local char = LocalPlayer.Character
+            if char and self == char:FindFirstChildOfClass("Humanoid") then return end
+        end
+        return SP.oldNewindex(self, key, value)
+    end
+    if type(newcclosure) == "function" then guard = newcclosure(guard) end
+    SP.oldNewindex = hookmetamethod(game, "__newindex", guard)
+    local blinded = 0
+    for _, fn in next, getgc() do
+        if typeof(fn) == "function" and islclosure(fn) then
+            local okS, src = pcall(debug.info, fn, "s")
+            if okS and type(src) == "string" and src:find("ContentCatalog%.Runtime") then
+                local okA, params = pcall(debug.info, fn, "a")
+                local okU, ups    = pcall(debug.getupvalues, fn)
+                if okA and params == 3 and okU and type(ups) == "table" and #ups == 5 then
+                    local orig
+                    local wrap = function(a, b, c)
+                        local s = orig(a, b, c)
+                        if type(s) == "table" and s.WalkSpeed and s.Position and s.Timestamp then
+                            s.WalkSpeed = 100000
+                        end
+                        return s
+                    end
+                    if type(newlclosure) == "function" then wrap = newlclosure(wrap) end
+                    local ok = pcall(function() orig = hookfunction(fn, wrap) end)
+                    if ok and type(orig) == "function" then blinded += 1 end
+                end
+            end
+        end
+    end
+    SP.hooksReady = true
+    if blinded > 0 then print(("[Speed] AC sampler blinded (%d fn)"):format(blinded))
+    else warn("[Speed] AC sampler not found — rubber-band possible") end
+end
+
+local function sp_enable()
+    local ok, miss = sp_checkExecutor()
+    if not ok then warn("[Speed] missing: " .. table.concat(miss, ", ") .. " — basic mode only")
+    else sp_installHooks() end
+    SP.lock = SP.speed; SP.enabled = true
+    if SP.hbConn then SP.hbConn:Disconnect() end
+    SP.hbConn = RunService.Heartbeat:Connect(function()
+        if not SP.enabled then return end
+        local char = LocalPlayer.
