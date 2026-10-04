@@ -491,4 +491,543 @@ local function sp_enable()
     if SP.hbConn then SP.hbConn:Disconnect() end
     SP.hbConn = RunService.Heartbeat:Connect(function()
         if not SP.enabled then return end
-        local char = LocalPlayer.
+        local char = LocalPlayer.Character
+        local hum  = char and char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.WalkSpeed ~= SP.speed then hum.WalkSpeed = SP.speed end
+    end)
+    print(("[Speed] ON — WalkSpeed %d"):format(SP.speed))
+end
+
+local function sp_disable()
+    SP.enabled = false; SP.lock = nil
+    if SP.hbConn then SP.hbConn:Disconnect(); SP.hbConn = nil end
+    local char = LocalPlayer.Character
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.WalkSpeed = 16 end
+    print("[Speed] OFF — WalkSpeed → 16")
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- KILL AURA
+-- Source: robscript.com/steal-an-egg-scripts/#l10scripts-kill-aura
+-- fires RE/BatSwing/Trigger at closest player within KA.range studs every 0.1s
+-- ════════════════════════════════════════════════════════════════════════════
+
+local KA = {
+    enabled = false,
+    range   = 16.5,   -- default, slider adjusts this (1–1000)
+    conn    = nil,
+    last    = 0,
+    -- module refs
+    BatSwingRemote   = nil,
+    ToolGameplayGuard = nil,
+}
+
+local function ka_init()
+    -- bind RE/BatSwing/Trigger
+    local Pkgs = ReplicatedStorage:FindFirstChild("Packages")
+    local Net  = Pkgs and Pkgs:FindFirstChild("Networking")
+    if Net then
+        KA.BatSwingRemote = Net:FindFirstChild("RE/BatSwing/Trigger")
+    end
+    if not KA.BatSwingRemote then
+        warn("[KA] RE/BatSwing/Trigger not found")
+        return false
+    end
+    -- bind ToolGameplayGuard
+    local Client = ReplicatedStorage:FindFirstChild("Client")
+    if Client then
+        local tgg = Client:FindFirstChild("ToolGameplayGuard")
+        if tgg then
+            local ok, mod = pcall(require, tgg)
+            if ok then KA.ToolGameplayGuard = mod end
+        end
+    end
+    return true
+end
+
+local function ka_createSeed()
+    local s, r = pcall(function()
+        return ("%*:%*:%*"):format(
+            LocalPlayer.UserId,
+            100,
+            math.floor(Workspace:GetServerTimeNow() * 1000)
+        )
+    end)
+    return s and r or nil
+end
+
+local function ka_canUseTool()
+    local s, r = pcall(function()
+        local c = LocalPlayer.Character; if not c then return false end
+        local t = c:FindFirstChildOfClass("Tool")
+        if not t or t:GetAttribute("ItemType") ~= "Gear" then return false end
+        local h = c:FindFirstChild("HumanoidRootPart"); if not h then return false end
+        if KA.ToolGameplayGuard and not KA.ToolGameplayGuard.IsLocalInsideArena() then return false end
+        if Workspace:GetAttribute("Event_MonsterEvent") then
+            return h.Position.Z > -268
+        end
+        return true
+    end)
+    return s and r or false
+end
+
+local function ka_getClosest()
+    local best, bestDist = nil, math.huge
+    for _, p in next, Players:GetPlayers() do
+        if p == LocalPlayer then continue end
+        local char = p.Character; if not char then continue end
+        local hrp  = char:FindFirstChild("HumanoidRootPart"); if not hrp then continue end
+        local dist = LocalPlayer:DistanceFromCharacter(hrp.Position)
+        if dist < bestDist and dist <= KA.range then
+            bestDist = dist; best = p
+        end
+    end
+    return best
+end
+
+local function ka_attack(target)
+    if not KA.BatSwingRemote then return end
+    pcall(function()
+        KA.BatSwingRemote:FireServer(target, ka_createSeed())
+    end)
+end
+
+local function ka_enable()
+    if not ka_init() then
+        warn("[KA] init failed — toggle off")
+        KA.enabled = false
+        return
+    end
+    KA.enabled = true
+    KA.last    = tick()
+    if KA.conn then KA.conn:Disconnect() end
+    KA.conn = RunService.Heartbeat:Connect(function()
+        if not KA.enabled then return end
+        local target = ka_getClosest()
+        if target and tick() - KA.last >= 0.1 and ka_canUseTool() then
+            ka_attack(target)
+            KA.last = tick()
+        end
+    end)
+    print(("[KA] ON — range: %d studs"):format(KA.range))
+end
+
+local function ka_disable()
+    KA.enabled = false
+    if KA.conn then KA.conn:Disconnect(); KA.conn = nil end
+    print("[KA] OFF")
+end
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- BACKGROUND WORKERS (farm)
+-- ════════════════════════════════════════════════════════════════════════════
+
+task.spawn(function()
+    while running do
+        task.wait(0.1)
+        local root = getRoot(); local hum = getHumanoid()
+        if root and hum and hum:GetAttribute("BobloStealHum") == true then
+            local lY = getLaneY(); local vel = root.AssemblyLinearVelocity
+            if root.Position.Y > lY + 12 then
+                local gy = groundedY(root.Position.X, root.Position.Z, lY)
+                root.CFrame = CFrame.new(root.Position.X, gy, root.Position.Z)
+                root.AssemblyLinearVelocity = Vector3.zero; root.AssemblyAngularVelocity = Vector3.zero
+            elseif math.abs(vel.Y) > 4 then
+                root.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z)
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while running do task.wait(0.2); swapHumanoid() end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if not running then return end
+    task.wait(0.35); swapHumanoid()
+end)
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- GUI
+-- ════════════════════════════════════════════════════════════════════════════
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name           = "SAE_Full_GUI"
+ScreenGui.ResetOnSpawn   = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = (type(gethui) == "function" and gethui()) or LocalPlayer.PlayerGui
+
+-- main window — taller to fit kill aura + slider
+local Main = Instance.new("Frame")
+Main.Name             = "Main"
+Main.Size             = UDim2.new(0, 280, 0, 420)
+Main.Position         = UDim2.new(0.5, -140, 0.5, -210)
+Main.BackgroundColor3 = Color3.fromRGB(14, 14, 20)
+Main.BorderSizePixel  = 0
+Main.Parent           = ScreenGui
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 9); c.Parent = Main
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(75, 65, 140); s.Thickness = 1.5; s.Parent = Main
+end
+
+-- title bar
+local TitleBar = Instance.new("Frame")
+TitleBar.Size             = UDim2.new(1, 0, 0, 38)
+TitleBar.BackgroundColor3 = Color3.fromRGB(24, 22, 38)
+TitleBar.BorderSizePixel  = 0
+TitleBar.Parent           = Main
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 9); c.Parent = TitleBar
+    local p = Instance.new("Frame")
+    p.Size = UDim2.new(1,0,0.5,0); p.Position = UDim2.new(0,0,0.5,0)
+    p.BackgroundColor3 = Color3.fromRGB(24,22,38); p.BorderSizePixel = 0; p.Parent = TitleBar
+end
+
+local TitleLabel = Instance.new("TextLabel")
+TitleLabel.Size               = UDim2.new(1, -44, 1, 0)
+TitleLabel.Position           = UDim2.new(0, 12, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.TextColor3         = Color3.fromRGB(195, 185, 255)
+TitleLabel.TextSize           = 14
+TitleLabel.Font               = Enum.Font.GothamBold
+TitleLabel.Text               = "🤑 LILBIG4DEV"
+TitleLabel.TextXAlignment     = Enum.TextXAlignment.Left
+TitleLabel.Parent             = TitleBar
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size             = UDim2.new(0, 22, 0, 22)
+CloseBtn.Position         = UDim2.new(1, -30, 0.5, -11)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(190, 55, 55)
+CloseBtn.Text             = "×"
+CloseBtn.TextColor3       = Color3.fromRGB(255,255,255)
+CloseBtn.TextSize         = 16
+CloseBtn.Font             = Enum.Font.GothamBold
+CloseBtn.BorderSizePixel  = 0
+CloseBtn.Parent           = TitleBar
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,5); c.Parent = CloseBtn end
+
+-- content list
+local Content = Instance.new("Frame")
+Content.Name                   = "Content"
+Content.Size                   = UDim2.new(1, -24, 1, -50)
+Content.Position               = UDim2.new(0, 12, 0, 44)
+Content.BackgroundTransparency = 1
+Content.Parent                 = Main
+do
+    local l = Instance.new("UIListLayout")
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.Padding   = UDim.new(0, 10)
+    l.Parent    = Content
+end
+
+-- stolen counter
+local StolenLabel = Instance.new("TextLabel")
+StolenLabel.Size             = UDim2.new(1, 0, 0, 28)
+StolenLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+StolenLabel.TextColor3       = Color3.fromRGB(150, 230, 150)
+StolenLabel.TextSize         = 12
+StolenLabel.Font             = Enum.Font.GothamBold
+StolenLabel.Text             = "🥚 Stolen: 0"
+StolenLabel.LayoutOrder      = 0
+StolenLabel.BorderSizePixel  = 0
+StolenLabel.Parent           = Content
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,7); c.Parent = StolenLabel end
+
+task.spawn(function()
+    while running do
+        task.wait(0.5)
+        StolenLabel.Text = ("🥚 Stolen: %d"):format(StolenCount)
+    end
+end)
+
+-- ── toggle row factory ───────────────────────────────────────────────────────
+local function makeRow(parent, icon, label, order)
+    local Row = Instance.new("Frame")
+    Row.Size             = UDim2.new(1, 0, 0, 46)
+    Row.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+    Row.BorderSizePixel  = 0
+    Row.LayoutOrder      = order
+    Row.Parent           = parent
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,7); c.Parent = Row end
+
+    local Lbl = Instance.new("TextLabel")
+    Lbl.Size               = UDim2.new(0.62, 0, 1, 0)
+    Lbl.Position           = UDim2.new(0, 12, 0, 0)
+    Lbl.BackgroundTransparency = 1
+    Lbl.TextColor3         = Color3.fromRGB(200, 195, 215)
+    Lbl.TextSize           = 13
+    Lbl.Font               = Enum.Font.Gotham
+    Lbl.Text               = icon .. "  " .. label
+    Lbl.TextXAlignment     = Enum.TextXAlignment.Left
+    Lbl.Parent             = Row
+
+    local Pill = Instance.new("Frame")
+    Pill.Size             = UDim2.new(0, 46, 0, 24)
+    Pill.Position         = UDim2.new(1, -56, 0.5, -12)
+    Pill.BackgroundColor3 = Color3.fromRGB(55, 55, 70)
+    Pill.BorderSizePixel  = 0
+    Pill.Parent           = Row
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = Pill end
+
+    local Knob = Instance.new("Frame")
+    Knob.Size             = UDim2.new(0, 17, 0, 17)
+    Knob.Position         = UDim2.new(0, 3, 0.5, -8)
+    Knob.BackgroundColor3 = Color3.fromRGB(130, 125, 155)
+    Knob.BorderSizePixel  = 0
+    Knob.Parent           = Pill
+    do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = Knob end
+
+    local Btn = Instance.new("TextButton")
+    Btn.Size                   = UDim2.new(1, 0, 1, 0)
+    Btn.BackgroundTransparency = 1
+    Btn.Text                   = ""
+    Btn.Parent                 = Row
+    return Btn, Pill, Knob
+end
+
+local function animToggle(on, pill, knob)
+    local ti = TweenInfo.new(0.14, Enum.EasingStyle.Quad)
+    if on then
+        TweenService:Create(pill, ti, {BackgroundColor3 = Color3.fromRGB(105,80,230)}):Play()
+        TweenService:Create(knob, ti, {Position = UDim2.new(0,26,0.5,-8), BackgroundColor3 = Color3.fromRGB(255,255,255)}):Play()
+    else
+        TweenService:Create(pill, ti, {BackgroundColor3 = Color3.fromRGB(55,55,70)}):Play()
+        TweenService:Create(knob, ti, {Position = UDim2.new(0,3,0.5,-8), BackgroundColor3 = Color3.fromRGB(130,125,155)}):Play()
+    end
+end
+
+-- auto farm
+local AF = { enabled = false }
+local function af_start()
+    AF.enabled = true
+    task.spawn(function()
+        while AF.enabled and running do
+            task.wait(0.25)
+            if IsCarryingEgg then
+                returnToBase(function() return AF.enabled and running and IsCarryingEgg end)
+                local dl = os.clock() + 4
+                while os.clock() < dl and IsCarryingEgg do task.wait(0.15) end
+            else
+                local t = pickRarestTarget(); if t then stealEgg(t) end
+            end
+        end
+    end)
+    print("[AutoFarm] ON — Rarest First")
+end
+local function af_stop()
+    AF.enabled = false
+    print(("[AutoFarm] OFF — stolen: %d"):format(StolenCount))
+end
+
+local afBtn, afPill, afKnob = makeRow(Content, "🥚", "Auto Farm Eggs", 1)
+afBtn.MouseButton1Click:Connect(function()
+    AF.enabled = not AF.enabled
+    animToggle(AF.enabled, afPill, afKnob)
+    if AF.enabled then af_start() else af_stop() end
+end)
+
+-- no knockback
+local nkBtn, nkPill, nkKnob = makeRow(Content, "⚡", "No Knockback", 2)
+nkBtn.MouseButton1Click:Connect(function()
+    NK.enabled = not NK.enabled
+    animToggle(NK.enabled, nkPill, nkKnob)
+    if NK.enabled then nk_enable() else nk_disable() end
+end)
+
+-- speed hack
+local spBtn, spPill, spKnob = makeRow(Content, "💨", "Speed Hack", 3)
+spBtn.MouseButton1Click:Connect(function()
+    SP.enabled = not SP.enabled
+    animToggle(SP.enabled, spPill, spKnob)
+    if SP.enabled then sp_enable() else sp_disable() end
+end)
+
+-- speed value input row
+local SpeedRow = Instance.new("Frame")
+SpeedRow.Size             = UDim2.new(1, 0, 0, 36)
+SpeedRow.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+SpeedRow.BorderSizePixel  = 0
+SpeedRow.LayoutOrder      = 4
+SpeedRow.Parent           = Content
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,7); c.Parent = SpeedRow end
+
+local SpLbl = Instance.new("TextLabel")
+SpLbl.Size               = UDim2.new(0.5, 0, 1, 0)
+SpLbl.Position           = UDim2.new(0, 12, 0, 0)
+SpLbl.BackgroundTransparency = 1
+SpLbl.TextColor3         = Color3.fromRGB(160, 155, 180)
+SpLbl.TextSize           = 12
+SpLbl.Font               = Enum.Font.Gotham
+SpLbl.Text               = "Speed Value"
+SpLbl.TextXAlignment     = Enum.TextXAlignment.Left
+SpLbl.Parent             = SpeedRow
+
+local SpBox = Instance.new("TextBox")
+SpBox.Size             = UDim2.new(0, 72, 0, 24)
+SpBox.Position         = UDim2.new(1, -82, 0.5, -12)
+SpBox.BackgroundColor3 = Color3.fromRGB(32, 30, 50)
+SpBox.TextColor3       = Color3.fromRGB(220, 215, 255)
+SpBox.PlaceholderText  = "500"
+SpBox.Text             = "500"
+SpBox.TextSize         = 12
+SpBox.Font             = Enum.Font.GothamBold
+SpBox.ClearTextOnFocus = false
+SpBox.BorderSizePixel  = 0
+SpBox.Parent           = SpeedRow
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,5); c.Parent = SpBox
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(90,75,160); s.Thickness = 1; s.Parent = SpBox
+end
+SpBox.FocusLost:Connect(function()
+    local v = tonumber(SpBox.Text)
+    if v and v > 0 and v <= 1e6 then
+        SP.speed = v; if SP.enabled then SP.lock = v end
+        print(("[Speed] value → %d"):format(v))
+    else SpBox.Text = tostring(SP.speed) end
+end)
+
+-- ── KILL AURA toggle row ─────────────────────────────────────────────────────
+local kaBtn, kaPill, kaKnob = makeRow(Content, "🗡️", "Kill Aura", 5)
+kaBtn.MouseButton1Click:Connect(function()
+    KA.enabled = not KA.enabled
+    animToggle(KA.enabled, kaPill, kaKnob)
+    if KA.enabled then ka_enable() else ka_disable() end
+end)
+
+-- ── KILL AURA RANGE SLIDER (1–1000, default 16.5) ───────────────────────────
+local SliderRow = Instance.new("Frame")
+SliderRow.Size             = UDim2.new(1, 0, 0, 56)
+SliderRow.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+SliderRow.BorderSizePixel  = 0
+SliderRow.LayoutOrder      = 6
+SliderRow.Parent           = Content
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0,7); c.Parent = SliderRow end
+
+-- header: label + value display
+local SliderHeader = Instance.new("Frame")
+SliderHeader.Size                  = UDim2.new(1, -16, 0, 22)
+SliderHeader.Position              = UDim2.new(0, 8, 0, 6)
+SliderHeader.BackgroundTransparency = 1
+SliderHeader.Parent                = SliderRow
+
+local SliderLbl = Instance.new("TextLabel")
+SliderLbl.Size               = UDim2.new(0.7, 0, 1, 0)
+SliderLbl.BackgroundTransparency = 1
+SliderLbl.TextColor3         = Color3.fromRGB(160, 155, 180)
+SliderLbl.TextSize           = 12
+SliderLbl.Font               = Enum.Font.Gotham
+SliderLbl.Text               = "🗡️  Aura Range"
+SliderLbl.TextXAlignment     = Enum.TextXAlignment.Left
+SliderLbl.Parent             = SliderHeader
+
+local SliderVal = Instance.new("TextLabel")
+SliderVal.Size               = UDim2.new(0.3, 0, 1, 0)
+SliderVal.Position           = UDim2.new(0.7, 0, 0, 0)
+SliderVal.BackgroundTransparency = 1
+SliderVal.TextColor3         = Color3.fromRGB(195, 185, 255)
+SliderVal.TextSize           = 12
+SliderVal.Font               = Enum.Font.GothamBold
+SliderVal.Text               = "16"
+SliderVal.TextXAlignment     = Enum.TextXAlignment.Right
+SliderVal.Parent             = SliderHeader
+
+-- track
+local Track = Instance.new("Frame")
+Track.Size             = UDim2.new(1, -16, 0, 6)
+Track.Position         = UDim2.new(0, 8, 0, 36)
+Track.BackgroundColor3 = Color3.fromRGB(45, 42, 65)
+Track.BorderSizePixel  = 0
+Track.Parent           = SliderRow
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = Track end
+
+-- fill
+local Fill = Instance.new("Frame")
+Fill.Size             = UDim2.new(0, 0, 1, 0)
+Fill.BackgroundColor3 = Color3.fromRGB(105, 80, 230)
+Fill.BorderSizePixel  = 0
+Fill.Parent           = Track
+do local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = Fill end
+
+-- knob
+local SliderKnob = Instance.new("Frame")
+SliderKnob.Size             = UDim2.new(0, 16, 0, 16)
+SliderKnob.AnchorPoint      = Vector2.new(0.5, 0.5)
+SliderKnob.Position         = UDim2.new(0, 0, 0.5, 0)
+SliderKnob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+SliderKnob.BorderSizePixel  = 0
+SliderKnob.ZIndex           = 5
+SliderKnob.Parent           = Track
+do
+    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(1,0); c.Parent = SliderKnob
+    local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(105,80,230); s.Thickness = 2; s.Parent = SliderKnob
+end
+
+-- invisible drag button
+local SliderBtn = Instance.new("TextButton")
+SliderBtn.Size                  = UDim2.new(1, 20, 1, 20)
+SliderBtn.Position              = UDim2.new(0, -10, 0, -10)
+SliderBtn.BackgroundTransparency = 1
+SliderBtn.Text                  = ""
+SliderBtn.ZIndex                = 6
+SliderBtn.Parent                = Track
+
+-- slider min/max
+local SLIDER_MIN = 1
+local SLIDER_MAX = 1000
+
+local function sliderSetRange(range)
+    KA.range = math.clamp(range, SLIDER_MIN, SLIDER_MAX)
+    local pct = (KA.range - SLIDER_MIN) / (SLIDER_MAX - SLIDER_MIN)
+    Fill.Size              = UDim2.new(pct, 0, 1, 0)
+    SliderKnob.Position    = UDim2.new(pct, 0, 0.5, 0)
+    SliderVal.Text         = tostring(math.floor(KA.range))
+    if KA.enabled then
+        print(("[KA] range → %d studs"):format(math.floor(KA.range)))
+    end
+end
+
+-- initialise knob at default 16.5
+sliderSetRange(16.5)
+
+-- drag logic
+local sliderDragging = false
+
+SliderBtn.MouseButton1Down:Connect(function()
+    sliderDragging = true
+end)
+
+UserInputService.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.MouseButton1
+    or inp.UserInputType == Enum.UserInputType.Touch then
+        sliderDragging = false
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(inp)
+    if not sliderDragging then return end
+    if inp.UserInputType ~= Enum.UserInputType.MouseMovement
+    and inp.UserInputType ~= Enum.UserInputType.Touch then return end
+    local trackAbs  = Track.AbsolutePosition
+    local trackSize = Track.AbsoluteSize
+    local mouseX    = inp.Position.X
+    local pct = math.clamp((mouseX - trackAbs.X) / trackSize.X, 0, 1)
+    sliderSetRange(SLIDER_MIN + (SLIDER_MAX - SLIDER_MIN) * pct)
+end)
+
+-- touch drag on mobile
+SliderBtn.InputBegan:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.Touch then
+        sliderDragging = true
+    end
+end)
+SliderBtn.InputEnded:Connect(function(inp)
+    if inp.UserInputType == Enum.UserInputType.Touch then
+        sliderDragging = false
+    end
+end)
+
+-- ── DRAG WINDOW ──────────────────────────────────────────────────────────────
+local dragging, dragInput, dragStart, startPos
+TitleBar
